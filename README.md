@@ -67,33 +67,28 @@ odjezdovou tabuli Zličína, drží si poslední známé zpoždění 336 a 384 a
 
 ## 3. Automatické spouštění
 
-### 3a. Cloud (doporučeno) — `monitor.py snapshot --wait`
+### 3a. GitHub Actions (doporučeno) — `.github/workflows/snapshot.yml`
 
-Sběr běží jako dvě **cloudové rutiny Claude Code** (nezávislé na tvém PC):
+Sběr běží jako **GitHub Actions workflow** v tomhle repu (nezávislé na tvém PC).
+GitHub-hosted runner má volný ven na internet — Claude cloud prostředí naopak
+`api.golemio.cz` blokuje egress politikou, takže tam to nejde.
 
-| rutina | cron (UTC) | spoj |
-|--------|-----------|------|
-| PID přestup 6:01 | `3 4,5 * * 1-5` | 0601 |
-| PID přestup 7:01 | `4 5,6 * * 1-5` | 0701 |
+- Cron: `55 3,4,5 * * 1-5` (UTC), tři záběry ráno. Skript `snapshot --wait`
+  spočítá pražský místní čas, u „správného" záběru počká na čas přestupu a
+  ~16 min polluje odjezdovou tabuli Zličína (u 336 drží *nejhorší* zpoždění,
+  u 384 *poslední*), zapíše řádek do `data/results.csv` a **commitne + pushne**.
+  „Špatné" záběry (o hodinu vedle kvůli letnímu/zimnímu času) skončí do pár sekund.
+- **Letní/zimní čas řeší kód** — nic se nikdy ručně nepřenastavuje.
+- API klíč: GitHub **secret** `GOLEMIO_API_KEY` (Settings → Secrets and variables
+  → Actions). `monitor.py` bere klíč z proměnné `GOLEMIO_API_KEY`, jinak z
+  `config.json` (lokálně).
+- Ruční spuštění / test: záložka **Actions → PID snapshot → Run workflow**.
 
-Každá rutina naklonuje tenhle repo, spustí `python monitor.py snapshot --wait`,
-zapíše jeden řádek do `data/results.csv` a **commitne + pushne** zpět do repa.
-Statistika se pak dělá z `data/results.csv` kdekoli (`report`).
-
-`snapshot --wait`: spočítá pražský místní čas, počká do ~2 min před příjezd 336
-a pak 16 minut polluje odjezdovou tabuli Zličína (u 336 si drží *nejhorší*
-zpoždění, u 384 *poslední*).
-
-**Letní/zimní čas je vyřešený v kódu** — proto má cron dva záběry (`4,5` resp.
-`5,6`). Ať je letní nebo zimní čas, jeden záběr vždy padne cca 5 min před
-snímkování a odpolluje; druhý je o hodinu vedle a skript ho během ~2 s ukončí.
-Nic se nemusí ručně přenastavovat.
-
-Předpoklady:
-- GitHub účet propojený s Claude Code na claude.ai.
-- `config.json` s API klíčem je v repu (repo je **private**). Klíč jde kdykoli
-  otočit na api.golemio.cz a nahradit v `config.json`. Alternativně nastav
-  `GOLEMIO_API_KEY` jako proměnnou prostředí (má přednost před `config.json`).
+Nastavení (jednorázově):
+```bash
+gh secret set GOLEMIO_API_KEY --repo JindraKK/pid-transfer-monitor   # vloží klíč
+gh auth refresh -s workflow                                          # aby šlo pushnout .github/workflows/
+```
 
 ### 3b. Lokálně na Windows (záloha) — `register-task.ps1`
 
@@ -134,14 +129,15 @@ python monitor.py verify-timetable "C:\Users\Jindra\Documents\Claude\Projects\PI
 ## Soubory
 
 ```
-monitor.py            hlavní skript (selftest / collect / snapshot / report / verify-timetable)
-config.json           API klíč a nastavení (v private repu; klíč jde otočit / dát do env GOLEMIO_API_KEY)
-config.example.json   šablona
-connections.json      definice sledovaných spojů
-register-task.ps1     lokální záloha: registrace úlohy do Plánovače úloh Windows
-data/results.csv      jeden řádek na spoj a den  ← z tohohle se dělá statistika
-data/samples.jsonl    syrové vzorky (pro pozdější rozbor)
-logs/                 logy běhu (necommitují se)
+monitor.py                     hlavní skript (selftest / collect / snapshot / report / verify-timetable)
+.github/workflows/snapshot.yml  GitHub Actions – automatický ranní sběr
+config.json                    lokální API klíč (NENÍ v repu; v Actions se bere secret GOLEMIO_API_KEY)
+config.example.json            šablona pro config.json
+connections.json               definice sledovaných spojů
+register-task.ps1              lokální záloha: úloha do Plánovače úloh Windows
+data/results.csv               jeden řádek na spoj a den  ← z tohohle se dělá statistika
+data/samples.jsonl             syrové vzorky (pro pozdější rozbor)
+logs/                          logy běhu (necommitují se)
 ```
 
 ## Zdroje dat

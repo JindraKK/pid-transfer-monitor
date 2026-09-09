@@ -435,7 +435,10 @@ def cmd_snapshot(cfg, conns, duration_min=16, poll_s=45, wait=False, lead_min=2)
         if wait:
             start_at = arr - lead_min           # zacni snimkovat lead_min pred prijezdem 336
             mins_to_start = start_at - cur_min
-            if not (-(duration_min + 5) <= mins_to_start <= 40):
+            # prijmi jen "spravny" cron zaber: bud tesne pred snimkovanim, nebo uz
+            # v jeho prubehu. "Spatny" zaber (o hodinu vedle kvuli DST, nebo cron
+            # jine linky) je vzdy >= ~45 min mimo -> odmitnut.
+            if not (-(duration_min + 8) <= mins_to_start <= 45):
                 continue
             wait_s = max(0, mins_to_start * 60 - now.second)
         else:
