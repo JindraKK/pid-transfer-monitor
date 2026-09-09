@@ -50,8 +50,9 @@ Mělo by to vypsat aktuální zpoždění linek 336 a 384 na Zličíně.
 ## 2. Sběr dat
 
 ```bash
-python monitor.py collect          # běží celé ráno, na konci každého okna zapíše řádek
-python monitor.py collect --once   # jen jeden dotaz teď, pro ladění
+python monitor.py collect            # běží celé ráno, na konci každého okna zapíše řádek
+python monitor.py collect --once     # jen jeden dotaz teď, pro ladění
+python monitor.py snapshot           # krátké ~6min polování kolem času přestupu (cloud/cron)
 ```
 
 `collect` počká na začátek prvního okna (5:45), pak se každou minutu ptá na
@@ -64,22 +65,41 @@ odjezdovou tabuli Zličína, drží si poslední známé zpoždění 336 a 384 a
   statistiky úspěšnosti se nepočítá.
 - Když už výsledek pro dnešek existuje, spoj se přeskočí (bezpečné pouštět víckrát).
 
-## 3. Automatické spouštění (Windows Plánovač úloh)
+## 3. Automatické spouštění
+
+### 3a. Cloud (doporučeno) — `monitor.py snapshot`
+
+Sběr běží jako dvě **cloudové rutiny Claude Code** (nezávislé na tvém PC):
+
+| rutina | cron (UTC) | čas Praha (letní / zimní) | spoj |
+|--------|-----------|---------------------------|------|
+| PID přestup 6:01 | `15 4 * * 1-5` | 6:15 / *5:15 → přehodit na `15 5`* | 0601 |
+| PID přestup 7:01 | `16 5 * * 1-5` | 7:16 / *6:16 → přehodit na `16 6`* | 0701 |
+
+Každá rutina naklonuje tenhle repo, spustí `python monitor.py snapshot --minutes 6`
+(krátké polování kolem času přestupu — u 336 si drží *nejhorší* zpoždění, u 384
+*poslední*), zapíše jeden řádek do `data/results.csv` a **commitne + pushne** zpět
+do repa. Statistika se pak dělá z `data/results.csv` kdekoli (`report`).
+
+Předpoklady:
+- GitHub účet propojený s Claude Code na claude.ai (Settings → Connectors / GitHub).
+- `config.json` s API klíčem je v repu (repo je **private**). Klíč jde kdykoli
+  otočit na api.golemio.cz a nahradit v `config.json`. Alternativně nastav
+  `GOLEMIO_API_KEY` jako proměnnou prostředí (má přednost před `config.json`).
+
+**Letní/zimní čas:** cron je vždy v UTC. Praha přechází na zimní čas 26. 10. 2026 —
+pak je potřeba obě rutiny posunout o hodinu (viz tabulka).
+
+### 3b. Lokálně na Windows (záloha) — `register-task.ps1`
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\register-task.ps1
 ```
 
-Vytvoří úlohu **„PID transfer monitor"**, trigger Po–Pá 5:43, s volbou
-*Probudit počítač*.
-
-**Uspaný počítač:** „Probudit počítač" funguje jen z běžného spánku (S3).
-Z hibernace ani z vypnutého stavu se úloha nespustí — ten den prostě v datech
-chybí (statistika s tím počítá). Na noteboocích s „moderním pohotovostním
-režimem" (S0) bývá buzení nespolehlivé; jistota je nechat PC přes noc zapnutý,
-nebo si sběr přesunout do cloudu (viz níže).
-
-Ruční test úlohy: `Start-ScheduledTask -TaskName "PID transfer monitor"`
+Úloha Po–Pá 5:43 s *Probudit počítač*. **Pozor:** na tomhle notebooku (jen
+Modern Standby S0, „povolit časovače pro probuzení" vypnuté na baterii, noční
+restarty kvůli Windows Update) se v praxi nespouští spolehlivě — proto cloud.
+Ruční test: `Start-ScheduledTask -TaskName "PID transfer monitor"`
 Odebrání: `Unregister-ScheduledTask -TaskName "PID transfer monitor" -Confirm:$false`
 
 ## 4. Statistika
@@ -109,14 +129,14 @@ python monitor.py verify-timetable "C:\Users\Jindra\Documents\Claude\Projects\PI
 ## Soubory
 
 ```
-monitor.py            hlavní skript (collect / report / selftest / verify-timetable)
-config.json           tvůj API klíč a nastavení  (necommitovat)
+monitor.py            hlavní skript (selftest / collect / snapshot / report / verify-timetable)
+config.json           API klíč a nastavení (v private repu; klíč jde otočit / dát do env GOLEMIO_API_KEY)
 config.example.json   šablona
 connections.json      definice sledovaných spojů
-register-task.ps1     registrace úlohy do Plánovače úloh
+register-task.ps1     lokální záloha: registrace úlohy do Plánovače úloh Windows
 data/results.csv      jeden řádek na spoj a den  ← z tohohle se dělá statistika
-data/samples.jsonl    syrové minutové vzorky (pro pozdější rozbor)
-logs/                 logy běhu
+data/samples.jsonl    syrové vzorky (pro pozdější rozbor)
+logs/                 logy běhu (necommitují se)
 ```
 
 ## Zdroje dat
