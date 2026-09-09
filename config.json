@@ -1,0 +1,8 @@
+{
+  "api_key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6NjA1MywiaWF0IjoxNzg4NzY4NTEwLCJleHAiOjExNzg4NzY4NTEwLCJpc3MiOiJnb2xlbWlvIiwianRpIjoiMTMxOGQ4ZDMtYTQ2Zi00MzQxLTg4NDYtMDViYzJmZjY1MDVlIn0.1OJw9oaYgWRz82vETPivRCgKrPU08qrDtqGxVRQ2TB0",
+  "api_base": "https://api.golemio.cz",
+  "node_asw_id": 1141,
+  "node_name": "Zlicin",
+  "poll_interval_s": 60,
+  "transfer_buffer_min": 1
+}

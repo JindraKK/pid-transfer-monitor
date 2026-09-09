@@ -1,0 +1,16 @@
+[
+  {
+    "id": "0601",
+    "label": "Chyne 6:01 -> Zlicin -> Beroun (prijezd 336 6:10, odjezd 384 6:20)",
+    "feeder":    { "route": "336", "sched_arrival":   "06:10" },
+    "connector": { "route": "384", "sched_departure": "06:20", "next_sched_departure": "06:50" },
+    "window": { "start": "05:45", "end": "06:35" }
+  },
+  {
+    "id": "0701",
+    "label": "Chyne 7:01 -> Zlicin -> Beroun (prijezd 336 7:11, odjezd 384 7:20)",
+    "feeder":    { "route": "336", "sched_arrival":   "07:11" },
+    "connector": { "route": "384", "sched_departure": "07:20", "next_sched_departure": "07:50" },
+    "window": { "start": "06:55", "end": "07:40" }
+  }
+]

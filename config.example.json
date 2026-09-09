@@ -1,0 +1,8 @@
+{
+  "api_key": "SEM_VLOZ_GOLEMIO_X-ACCESS-TOKEN",
+  "api_base": "https://api.golemio.cz",
+  "node_asw_id": 1141,
+  "node_name": "Zlicin",
+  "poll_interval_s": 60,
+  "transfer_buffer_min": 1
+}
