@@ -67,28 +67,33 @@ odjezdovou tabuli Zličína, drží si poslední známé zpoždění 336 a 384 a
 
 ## 3. Automatické spouštění
 
-### 3a. Cloud (doporučeno) — `monitor.py snapshot`
+### 3a. Cloud (doporučeno) — `monitor.py snapshot --wait`
 
 Sběr běží jako dvě **cloudové rutiny Claude Code** (nezávislé na tvém PC):
 
-| rutina | cron (UTC) | čas Praha (letní / zimní) | spoj |
-|--------|-----------|---------------------------|------|
-| PID přestup 6:01 | `15 4 * * 1-5` | 6:15 / *5:15 → přehodit na `15 5`* | 0601 |
-| PID přestup 7:01 | `16 5 * * 1-5` | 7:16 / *6:16 → přehodit na `16 6`* | 0701 |
+| rutina | cron (UTC) | spoj |
+|--------|-----------|------|
+| PID přestup 6:01 | `3 4,5 * * 1-5` | 0601 |
+| PID přestup 7:01 | `4 5,6 * * 1-5` | 0701 |
 
-Každá rutina naklonuje tenhle repo, spustí `python monitor.py snapshot --minutes 6`
-(krátké polování kolem času přestupu — u 336 si drží *nejhorší* zpoždění, u 384
-*poslední*), zapíše jeden řádek do `data/results.csv` a **commitne + pushne** zpět
-do repa. Statistika se pak dělá z `data/results.csv` kdekoli (`report`).
+Každá rutina naklonuje tenhle repo, spustí `python monitor.py snapshot --wait`,
+zapíše jeden řádek do `data/results.csv` a **commitne + pushne** zpět do repa.
+Statistika se pak dělá z `data/results.csv` kdekoli (`report`).
+
+`snapshot --wait`: spočítá pražský místní čas, počká do ~2 min před příjezd 336
+a pak 16 minut polluje odjezdovou tabuli Zličína (u 336 si drží *nejhorší*
+zpoždění, u 384 *poslední*).
+
+**Letní/zimní čas je vyřešený v kódu** — proto má cron dva záběry (`4,5` resp.
+`5,6`). Ať je letní nebo zimní čas, jeden záběr vždy padne cca 5 min před
+snímkování a odpolluje; druhý je o hodinu vedle a skript ho během ~2 s ukončí.
+Nic se nemusí ručně přenastavovat.
 
 Předpoklady:
-- GitHub účet propojený s Claude Code na claude.ai (Settings → Connectors / GitHub).
+- GitHub účet propojený s Claude Code na claude.ai.
 - `config.json` s API klíčem je v repu (repo je **private**). Klíč jde kdykoli
   otočit na api.golemio.cz a nahradit v `config.json`. Alternativně nastav
   `GOLEMIO_API_KEY` jako proměnnou prostředí (má přednost před `config.json`).
-
-**Letní/zimní čas:** cron je vždy v UTC. Praha přechází na zimní čas 26. 10. 2026 —
-pak je potřeba obě rutiny posunout o hodinu (viz tabulka).
 
 ### 3b. Lokálně na Windows (záloha) — `register-task.ps1`
 

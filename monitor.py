@@ -407,11 +407,17 @@ def cmd_collect(cfg, conns, once=False):
         time.sleep(cfg["poll_interval_s"])
 
 
-def cmd_snapshot(cfg, conns, duration_min=6, poll_s=45):
+def cmd_snapshot(cfg, conns, duration_min=16, poll_s=45, wait=False, lead_min=2):
     """Jeden 'snimek' - kratke polovani kolem casu prestupu. Pro cloud/cron.
 
-    Sam si najde spoj(e), jejichz cas prestupu spada do 'ted', poll-uje ~6 minut
-    a zapise vysledek. Nic nedela, kdyz zadny spoj neni na rade nebo uz ma vysledek.
+    --wait (rezim pro cron, odolny vuci letnimu/zimnimu casu):
+      Cron rutina ma dva zabery (napr. `05 4,5 * * 1-5`), aby jeden vzdy padl
+      cca 10 min pred prestup nezavisle na tom, jestli je letni nebo zimni cas.
+      Skript spocita mistni prazsky cas, a kdyz je do zacatku snimkovani < 40 min,
+      pocka na nej a odpolluje. Kdyz je to daleko (druhy - "spatny" - zaber),
+      hned skonci.
+
+    Bez --wait: polluje hned ted, kdyz nejaky prestup spada do aktualniho casu.
     """
     os.makedirs(DATA_DIR, exist_ok=True)
     now = prague_now()
@@ -422,23 +428,40 @@ def cmd_snapshot(cfg, conns, duration_min=6, poll_s=45):
         _log(f"snapshot: {WEEKDAYS_CS[now.weekday()]} - vikend, koncim.")
         return
 
-    targets = []
+    picks = []            # (conn, seconds_to_wait)
     for c in conns:
         arr = hhmm_to_minutes(c["feeder"]["sched_arrival"])
         dep = hhmm_to_minutes(c["connector"]["sched_departure"])
-        if not (arr - 10 <= cur_min <= dep + 15):
-            continue
+        if wait:
+            start_at = arr - lead_min           # zacni snimkovat lead_min pred prijezdem 336
+            mins_to_start = start_at - cur_min
+            if not (-(duration_min + 5) <= mins_to_start <= 40):
+                continue
+            wait_s = max(0, mins_to_start * 60 - now.second)
+        else:
+            if not (arr - 10 <= cur_min <= dep + 15):
+                continue
+            wait_s = 0
         if _today_has_result(date_str, c["id"]):
             _log(f"snapshot {c['id']}: vysledek pro {date_str} uz existuje, preskakuji.")
             continue
-        targets.append({"conn": c, "final": False,
-                        "state": {"feeder": None, "connector": None,
-                                  "feeder_seen": 0, "connector_seen": 0,
-                                  "_feeder_worst": None}})
-    if not targets:
-        _log(f"snapshot: v {now:%H:%M} neni zadny spoj na rade, koncim.")
+        picks.append((c, wait_s))
+
+    if not picks:
+        _log(f"snapshot: v {now:%H:%M} ({'letni' if prague_offset_hours(dt.datetime.now(dt.timezone.utc)) == 2 else 'zimni'} "
+             f"cas) neni zadny prestup na rade - koncim (mozna 'druhy' cron zaber).")
         return
 
+    wait_s = min(w for _, w in picks)
+    if wait_s > 0:
+        _log(f"snapshot: cekam {wait_s // 60} min na cas prestupu {[c['id'] for c, _ in picks]}...")
+        time.sleep(wait_s)
+
+    now = prague_now()
+    targets = [{"conn": c, "final": False,
+                "state": {"feeder": None, "connector": None,
+                          "feeder_seen": 0, "connector_seen": 0, "_feeder_worst": None}}
+               for c, _ in picks]
     _log(f"snapshot: {now:%H:%M} sleduji {[t['conn']['id'] for t in targets]} po {duration_min} min.")
     end_ts = time.time() + duration_min * 60
     polls_ok = polls_fail = 0
@@ -747,7 +770,9 @@ def main():
     pc = sub.add_parser("collect")
     pc.add_argument("--once", action="store_true", help="jen jeden dotaz a vypis")
     ps = sub.add_parser("snapshot", help="kratke polovani kolem casu prestupu (cloud/cron)")
-    ps.add_argument("--minutes", type=int, default=6, help="jak dlouho pollovat (vychozi 6)")
+    ps.add_argument("--minutes", type=int, default=16, help="jak dlouho pollovat (vychozi 16)")
+    ps.add_argument("--wait", action="store_true",
+                    help="pockej na cas nejblizsiho prestupu (rezim pro cron, odolny DST)")
     pr = sub.add_parser("report")
     pr.add_argument("--html", metavar="PATH", help="ulozit HTML report")
     pv = sub.add_parser("verify-timetable")
@@ -766,7 +791,7 @@ def main():
     elif args.cmd == "snapshot":
         cfg = load_config()
         conns = load_connections()
-        cmd_snapshot(cfg, conns, duration_min=args.minutes)
+        cmd_snapshot(cfg, conns, duration_min=args.minutes, wait=args.wait)
     elif args.cmd == "report":
         cmd_report(html_path=args.html)
     elif args.cmd == "verify-timetable":
