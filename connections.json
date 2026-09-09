@@ -12,5 +12,12 @@
     "feeder":    { "route": "336", "sched_arrival":   "07:11" },
     "connector": { "route": "384", "sched_departure": "07:20", "next_sched_departure": "07:50" },
     "window": { "start": "06:55", "end": "07:40" }
+  },
+  {
+    "id": "TEST0935",
+    "label": "DOCASNY TEST end-to-end (smazat po overeni)",
+    "feeder":    { "route": "336", "sched_arrival":   "09:35" },
+    "connector": { "route": "384", "sched_departure": "10:00" },
+    "window": { "start": "00:00", "end": "23:59" }
   }
 ]
