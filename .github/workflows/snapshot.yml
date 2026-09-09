@@ -1,0 +1,47 @@
+name: PID snapshot
+
+# Sbira realtime zpozdeni prestupu 336 -> 384 na Zlicine a commituje vysledek
+# do data/results.csv. Bezi na GitHub-hosted runneru (ma volny ven na internet,
+# na rozdil od Claude cloud environmentu, ktery api.golemio.cz blokuje).
+
+on:
+  workflow_dispatch: {}          # rucni spusteni (Actions -> PID snapshot -> Run workflow)
+  schedule:
+    # Cron je v UTC. Tri zabery kryji oba spoje v letnim i zimnim case:
+    #   leto  (UTC+2): 05:55 -> spoj 6:01 | 06:55 -> spoj 7:01 | 07:55 -> nic
+    #   zima  (UTC+1): 04:55 -> nic       | 05:55 -> spoj 6:01  | 06:55 -> spoj 7:01
+    # Skript (snapshot --wait) sam pozna, ktery zaber je "ten spravny", pocka
+    # na cas prestupu a odpolluje; ostatni zabery skonci behem par sekund.
+    - cron: '55 3,4,5 * * 1-5'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pid-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: snapshot
+        env:
+          GOLEMIO_API_KEY: ${{ secrets.GOLEMIO_API_KEY }}
+        run: python3 monitor.py snapshot --wait
+
+      - name: commit results
+        run: |
+          if [ -z "$(git status --porcelain data/)" ]; then
+            echo "Zadna nova data (vikend / svatek / spatny cron zaber / uz existuje)."
+            exit 0
+          fi
+          git config user.name  "pid-snapshot-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/
+          git commit -m "snapshot $(date -u '+%F %H:%M') UTC"
+          git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          git push
