@@ -32,5 +32,21 @@
       "start": "06:55",
       "end": "07:40"
     }
+  },
+  {
+    "id": "SECRETCHK",
+    "label": "DOCASNY test secretu (smazat)",
+    "feeder": {
+      "route": "384",
+      "sched_arrival": "11:00"
+    },
+    "connector": {
+      "route": "384",
+      "sched_departure": "11:00"
+    },
+    "window": {
+      "start": "00:00",
+      "end": "23:59"
+    }
   }
 ]

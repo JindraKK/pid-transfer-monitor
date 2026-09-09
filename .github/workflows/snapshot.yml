@@ -5,7 +5,12 @@ name: PID snapshot
 # na rozdil od Claude cloud environmentu, ktery api.golemio.cz blokuje).
 
 on:
-  workflow_dispatch: {}          # rucni spusteni (Actions -> PID snapshot -> Run workflow)
+  workflow_dispatch:             # rucni spusteni (Actions -> PID snapshot -> Run workflow)
+    inputs:
+      minutes:
+        description: "Delka pollovani v minutach (jen pro rucni beh)"
+        required: false
+        default: "16"
   schedule:
     # Cron je v UTC. Tri zabery kryji oba spoje v letnim i zimnim case:
     #   leto  (UTC+2): 05:55 -> spoj 6:01 | 06:55 -> spoj 7:01 | 07:55 -> nic
@@ -31,7 +36,7 @@ jobs:
       - name: snapshot
         env:
           GOLEMIO_API_KEY: ${{ secrets.GOLEMIO_API_KEY }}
-        run: python3 monitor.py snapshot --wait
+        run: python3 monitor.py snapshot --wait --minutes ${{ github.event.inputs.minutes || '16' }}
 
       - name: commit results
         run: |
