@@ -1,1 +1,2 @@
 date,conn_id,label,weekday,feeder_route,feeder_sched_arr,feeder_delay_s,feeder_eff_arr,feeder_canceled,feeder_rt_available,feeder_seen_count,conn_route,conn_sched_dep,conn_delay_s,conn_eff_dep,conn_canceled,conn_rt_available,buffer_min,margin_s,transfer_ok,verdict,next_conn_sched_dep,wait_if_missed_min,polls_ok,polls_fail,notes
+2026-09-09,SECRETCHK,DOCASNY test secretu (smazat),St,384,11:00,0,11:00:00,0,1,5,384,11:00,0,11:00:00,0,1,1,0,0,MISSED,,,5,0,
