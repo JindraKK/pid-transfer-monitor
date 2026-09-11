@@ -20,6 +20,11 @@ on:
     # je "na rade" nejaky prestup (~40 min pred nim az do jeho konce) - pokud
     # ne, beh skonci za par vterin, takze ta frekvence nic nestoji.
     - cron: '*/15 3-7 * * 1-5'
+    # JEDNORAZOVY TEST SPOLEHLIVOSTI SPOUSTENI (sobota 12.9.2026, viz README).
+    # Testuje jen, jestli GitHub cron fakticky odpaluje behy blizko ocekavanemu
+    # casu - skript sam se v sobotu hned ukonci (vikend), to se netestuje.
+    # Po vyhodnoceni (13.9.2026 nebo pozdeji) tenhle radek smazat.
+    - cron: '*/15 3-7 12 9 *'
 
 permissions:
   contents: write
