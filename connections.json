@@ -11,9 +11,18 @@
       "sched_departure": "06:20",
       "next_sched_departure": "06:50"
     },
+    "final_leg": {
+      "route": "384",
+      "sched_arrival": "06:50",
+      "node_asw_id": 1747,
+      "node_name": "Beroun,sidliste",
+      "walk_min_to_school": 5,
+      "school_name": "SZS Beroun (Mladeze 1102/8)",
+      "school_deadline": "08:00"
+    },
     "window": {
       "start": "05:45",
-      "end": "06:35"
+      "end": "06:56"
     }
   },
   {
@@ -28,9 +37,18 @@
       "sched_departure": "07:20",
       "next_sched_departure": "07:50"
     },
+    "final_leg": {
+      "route": "384",
+      "sched_arrival": "07:50",
+      "node_asw_id": 1747,
+      "node_name": "Beroun,sidliste",
+      "walk_min_to_school": 5,
+      "school_name": "SZS Beroun (Mladeze 1102/8)",
+      "school_deadline": "08:00"
+    },
     "window": {
       "start": "06:55",
-      "end": "07:40"
+      "end": "07:56"
     }
   }
 ]

@@ -26,6 +26,7 @@ import datetime as dt
 import json
 import os
 import statistics
+import subprocess
 import sys
 import time
 import urllib.error
@@ -49,6 +50,12 @@ RESULTS_FIELDS = [
     "buffer_min", "margin_s", "transfer_ok", "verdict",
     "next_conn_sched_dep", "wait_if_missed_min",
     "polls_ok", "polls_fail", "notes",
+    # posledni usek (napr. prijezd do Berouna) + odhad na skolu - pridano
+    # pozdeji, proto na konci: stare radky v CSV proste tyhle sloupce nemaji.
+    "final_route", "final_stop", "final_sched_arr", "final_delay_s",
+    "final_eff_arr", "final_canceled", "final_rt_available",
+    "walk_min_to_school", "school_name", "school_deadline",
+    "eta_school", "school_margin_min", "school_ok",
 ]
 
 WEEKDAYS_CS = ["Po", "Ut", "St", "Ct", "Pa", "So", "Ne"]
@@ -137,9 +144,9 @@ def api_get(cfg, path, params):
         return json.load(r)
 
 
-def fetch_board(cfg):
+def fetch_board(cfg, asw_id=None):
     return api_get(cfg, "/v2/pid/departureboards", {
-        "aswIds": cfg["node_asw_id"],
+        "aswIds": asw_id if asw_id is not None else cfg["node_asw_id"],
         "mode": "mixed",
         "minutesBefore": 20,
         "minutesAfter": 80,
@@ -147,6 +154,26 @@ def fetch_board(cfg):
         "order": "timetable",
         "airCondition": "false",
     })
+
+
+def _fetch_final_boards(cfg, conns_or_targets):
+    """Pro kazdy ruzny final_leg.node_asw_id mezi danymi spoji stahne tabuli
+    (jednou za tick, i kdyz vic spoju sdili stejny uzel). Chyby jen zaloguje."""
+    boards = {}
+    for item in conns_or_targets:
+        c = item.get("conn", item)
+        fl = c.get("final_leg")
+        if not fl:
+            continue
+        fid = fl.get("node_asw_id")
+        if fid in boards:
+            continue
+        try:
+            boards[fid] = fetch_board(cfg, fid)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
+            _log(f"posledni usek (uzel {fid}): dotaz selhal: {e!r}")
+            boards[fid] = None
+    return boards
 
 
 # --------------------------------------------------------------------------- #
@@ -227,6 +254,51 @@ def _today_has_result(date_str, conn_id):
     return False
 
 
+def _git(args, timeout=60):
+    return subprocess.run(["git", "-C", HERE] + args, capture_output=True, text=True,
+                           timeout=timeout, encoding="utf-8", errors="replace")
+
+
+def git_sync(commit_msg):
+    """Nejlepsi-moznou-snahou: pred sberem stahne novinky, po sberu commitne a
+    pushne data/. Pouziva se pri lokalnim behu (collect/snapshot na Windows),
+    aby vysledky nezustaly jen na disku, kdyz uz cloud beh nekdy neproběhne.
+    Kdyz tohle neni git repo, nebo git/sit neni k dispozici, tise se preskoci.
+    """
+    if not os.path.isdir(os.path.join(HERE, ".git")):
+        return
+    try:
+        st = _git(["status", "--porcelain", "data/"])
+        if st.returncode != 0 or not st.stdout.strip():
+            return
+        _git(["config", "user.name", "pid-local-collector"])
+        _git(["config", "user.email", "local@pid-monitor"])
+        _git(["add", "data/"])
+        c = _git(["commit", "-m", commit_msg])
+        if c.returncode != 0:
+            _log(f"git sync: commit selhal: {c.stderr.strip()[:300]}")
+            return
+        _git(["pull", "--rebase", "--autostash"], timeout=30)
+        p = _git(["push"], timeout=60)
+        if p.returncode == 0:
+            _log("git sync: vysledky commitnuty a pushnuty.")
+        else:
+            _log(f"git sync: push selhal (data zustavaji aspon lokalne): {p.stderr.strip()[:300]}")
+    except Exception as e:
+        _log(f"git sync selhal (nevadi, data zustavaji lokalne): {e!r}")
+
+
+def git_pull_quiet():
+    """Pred sberem zkusi stahnout novinky (napr. uz hotovy vysledek z cloudu),
+    aby se _today_has_result nespoléhal na zastaralou lokalni kopii."""
+    if not os.path.isdir(os.path.join(HERE, ".git")):
+        return
+    try:
+        _git(["pull", "--rebase", "--autostash", "--ff-only"], timeout=30)
+    except Exception:
+        pass
+
+
 def _write_result(row):
     os.makedirs(DATA_DIR, exist_ok=True)
     new = not os.path.exists(RESULTS_PATH)
@@ -244,6 +316,7 @@ def finalize(cfg, conn, state, date_str, polls_ok, polls_fail):
     f_arr = conn["feeder"]["sched_arrival"]
     c_dep = conn["connector"]["sched_departure"]
     nxt = conn["connector"].get("next_sched_departure")
+    fl = conn.get("final_leg")
 
     fs = state.get("feeder")
     cs = state.get("connector")
@@ -264,6 +337,9 @@ def finalize(cfg, conn, state, date_str, polls_ok, polls_fail):
         row = _blank_row(conn, date_str, buf, verdict, "; ".join(notes), polls_ok, polls_fail)
         row.update(feeder_route=f_route, feeder_sched_arr=f_arr, conn_route=c_route,
                    conn_sched_dep=c_dep, next_conn_sched_dep=nxt or "")
+        if fl:
+            row.update(final_route=fl["route"], final_stop=fl.get("node_name", ""),
+                       final_sched_arr=fl["sched_arrival"])
         _write_result(row)
         _log(f"{conn['id']}: {verdict} ({notes[0]})")
         return
@@ -318,11 +394,50 @@ def finalize(cfg, conn, state, date_str, polls_ok, polls_fail):
         "next_conn_sched_dep": nxt or "",
         "wait_if_missed_min": wait_if_missed,
         "polls_ok": polls_ok, "polls_fail": polls_fail,
-        "notes": "; ".join(notes),
+        "notes": "",  # doplni se na konci (muze pribyt poznamka ke skole)
     }
+
+    # --- posledni usek (napr. prijezd do Berouna) a odhad na skolu -------- #
+    if fl:
+        fs2 = state.get("final")
+        f2_delay = fs2["delay_s"] if fs2 else None
+        f2_canceled = bool(fs2 and fs2["canceled"])
+        f2_rt = bool(fs2 and fs2["rt_available"])
+        final_eff = eff(fl["sched_arrival"], f2_delay)
+        walk_min = int(fl.get("walk_min_to_school", 0))
+        deadline = fl.get("school_deadline")
+        row.update(
+            final_route=fl["route"], final_stop=fl.get("node_name", ""),
+            final_sched_arr=fl["sched_arrival"],
+            final_delay_s="" if f2_delay is None else f2_delay,
+            final_eff_arr=final_eff.strftime("%H:%M:%S"),
+            final_canceled=int(f2_canceled), final_rt_available=int(f2_rt),
+            walk_min_to_school=walk_min, school_name=fl.get("school_name", ""),
+            school_deadline=deadline or "",
+        )
+        if not f2_rt:
+            notes.append(f"{fl['route']} do {fl.get('node_name','')} bez realtime - bran jako vcas")
+        if verdict != "OK":
+            row.update(eta_school="", school_margin_min="", school_ok="")
+            notes.append("skola: nevyhodnoceno (prestup se nepovedl)")
+        elif f2_canceled:
+            row.update(eta_school="", school_margin_min="", school_ok=0)
+            notes.append(f"skola: {fl['route']} do {fl.get('node_name','')} zrusen")
+        elif deadline:
+            eta_school = final_eff + dt.timedelta(minutes=walk_min)
+            deadline_dt = dt.datetime.strptime(date_str + " " + deadline, "%Y-%m-%d %H:%M")
+            school_margin_min = int((deadline_dt - eta_school).total_seconds() // 60)
+            school_ok = school_margin_min >= 0
+            row.update(eta_school=eta_school.strftime("%H:%M:%S"),
+                       school_margin_min=school_margin_min, school_ok=int(school_ok))
+        else:
+            row.update(eta_school="", school_margin_min="", school_ok="")
+
+    row["notes"] = "; ".join(notes)
     _write_result(row)
     _log(f"{conn['id']}: {verdict}  margin={margin_s}s  "
-         f"{f_route} +{(f_delay or 0)//60}m / {c_route} +{(c_delay or 0)//60}m")
+         f"{f_route} +{(f_delay or 0)//60}m / {c_route} +{(c_delay or 0)//60}m"
+         + (f"  skola_margin={row.get('school_margin_min')}min" if fl and row.get("school_margin_min") != "" else ""))
 
 
 def _blank_row(conn, date_str, buf, verdict, notes, polls_ok, polls_fail):
@@ -338,6 +453,8 @@ def _blank_row(conn, date_str, buf, verdict, notes, polls_ok, polls_fail):
 
 def cmd_collect(cfg, conns, once=False):
     os.makedirs(DATA_DIR, exist_ok=True)
+    if not once:
+        git_pull_quiet()
     now = prague_now()
     date_str = now.strftime("%Y-%m-%d")
 
@@ -385,10 +502,12 @@ def cmd_collect(cfg, conns, once=False):
     while True:
         now = prague_now()
         cur_min = now.hour * 60 + now.minute
+        active_now = [a for a in active if not a["final"] and a["start"] <= cur_min <= a["end"]]
         try:
             board = fetch_board(cfg)
             polls_ok += 1
-            _process_board(board, active, date_str, cur_min)
+            final_boards = _fetch_final_boards(cfg, active_now)
+            _process_board(board, active, date_str, cur_min, final_boards)
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
             polls_fail += 1
             _log(f"Dotaz na API selhal: {e!r}")
@@ -403,6 +522,7 @@ def cmd_collect(cfg, conns, once=False):
                 if not a["final"]:
                     finalize(cfg, a["conn"], a["state"], date_str, polls_ok, polls_fail)
             _log("Hotovo.")
+            git_sync(f"local collect {date_str}")
             return
         time.sleep(cfg["poll_interval_s"])
 
@@ -420,6 +540,7 @@ def cmd_snapshot(cfg, conns, duration_min=16, poll_s=45, wait=False, lead_min=2)
     Bez --wait: polluje hned ted, kdyz nejaky prestup spada do aktualniho casu.
     """
     os.makedirs(DATA_DIR, exist_ok=True)
+    git_pull_quiet()
     now = prague_now()
     date_str = now.strftime("%Y-%m-%d")
     cur_min = now.hour * 60 + now.minute
@@ -428,7 +549,7 @@ def cmd_snapshot(cfg, conns, duration_min=16, poll_s=45, wait=False, lead_min=2)
         _log(f"snapshot: {WEEKDAYS_CS[now.weekday()]} - vikend, koncim.")
         return
 
-    picks = []            # (conn, seconds_to_wait)
+    picks = []            # (conn, seconds_to_wait, start_at_min)
     for c in conns:
         arr = hhmm_to_minutes(c["feeder"]["sched_arrival"])
         dep = hhmm_to_minutes(c["connector"]["sched_departure"])
@@ -448,31 +569,39 @@ def cmd_snapshot(cfg, conns, duration_min=16, poll_s=45, wait=False, lead_min=2)
         if _today_has_result(date_str, c["id"]):
             _log(f"snapshot {c['id']}: vysledek pro {date_str} uz existuje, preskakuji.")
             continue
-        picks.append((c, wait_s))
+        # kdyz je definovany posledni usek (napr. prijezd do Berouna), polluj
+        # az do jeho planovaneho prijezdu (+ rezerva), jinak vychozi delka.
+        fl = c.get("final_leg")
+        end_at = hhmm_to_minutes(fl["sched_arrival"]) + 4 if fl else start_at + duration_min
+        picks.append((c, wait_s, end_at))
 
     if not picks:
         _log(f"snapshot: v {now:%H:%M} ({'letni' if prague_offset_hours(dt.datetime.now(dt.timezone.utc)) == 2 else 'zimni'} "
              f"cas) neni zadny prestup na rade - koncim (mozna 'druhy' cron zaber).")
         return
 
-    wait_s = min(w for _, w in picks)
+    wait_s = min(w for _, w, _ in picks)
     if wait_s > 0:
-        _log(f"snapshot: cekam {wait_s // 60} min na cas prestupu {[c['id'] for c, _ in picks]}...")
+        _log(f"snapshot: cekam {wait_s // 60} min na cas prestupu {[c['id'] for c, _, _ in picks]}...")
         time.sleep(wait_s)
 
     now = prague_now()
     targets = [{"conn": c, "final": False,
                 "state": {"feeder": None, "connector": None,
                           "feeder_seen": 0, "connector_seen": 0, "_feeder_worst": None}}
-               for c, _ in picks]
-    _log(f"snapshot: {now:%H:%M} sleduji {[t['conn']['id'] for t in targets]} po {duration_min} min.")
-    end_ts = time.time() + duration_min * 60
+               for c, _, _ in picks]
+    max_end_at = max(end_at for _, _, end_at in picks)
+    cur_min2 = now.hour * 60 + now.minute
+    run_min = max(4, max_end_at - cur_min2)
+    _log(f"snapshot: {now:%H:%M} sleduji {[t['conn']['id'] for t in targets]} po {run_min} min.")
+    end_ts = time.time() + run_min * 60
     polls_ok = polls_fail = 0
     while True:
         try:
             board = fetch_board(cfg)
             polls_ok += 1
-            _process_snapshot(board, targets, date_str)
+            final_boards = _fetch_final_boards(cfg, targets)
+            _process_snapshot(board, targets, date_str, final_boards)
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as e:
             polls_fail += 1
             _log(f"snapshot: dotaz na API selhal: {e!r}")
@@ -483,9 +612,11 @@ def cmd_snapshot(cfg, conns, duration_min=16, poll_s=45, wait=False, lead_min=2)
     for t in targets:
         finalize(cfg, t["conn"], t["state"], date_str, polls_ok, polls_fail)
     _log("snapshot: hotovo.")
+    git_sync(f"local snapshot {date_str}")
 
 
-def _process_snapshot(board, targets, date_str):
+def _process_snapshot(board, targets, date_str, final_boards=None):
+    final_boards = final_boards or {}
     for t in targets:
         c, st = t["conn"], t["state"]
         raw = {"ts": prague_now().isoformat(timespec="seconds"), "date": date_str,
@@ -511,11 +642,13 @@ def _process_snapshot(board, targets, date_str):
             raw["connector"] = s
             if s["rt_available"] or s["canceled"]:
                 st["connector"] = s   # u navazujiciho (384) ber posledni = nejbliz odjezdu
-        if "feeder" in raw or "connector" in raw:
+        _check_final_leg(c, st, final_boards, raw)
+        if "feeder" in raw or "connector" in raw or "final" in raw:
             _append_jsonl(SAMPLES_PATH, raw)
 
 
-def _process_board(board, active, date_str, cur_min):
+def _process_board(board, active, date_str, cur_min, final_boards=None):
+    final_boards = final_boards or {}
     for a in active:
         if a["final"] or not (a["start"] <= cur_min <= a["end"]):
             continue
@@ -537,8 +670,35 @@ def _process_board(board, active, date_str, cur_min):
             raw["connector"] = s
             if s["rt_available"] or s["canceled"]:
                 st["connector"] = s
-        if "feeder" in raw or "connector" in raw:
+        _check_final_leg(c, st, final_boards, raw)
+        if "feeder" in raw or "connector" in raw or "final" in raw:
             _append_jsonl(SAMPLES_PATH, raw)
+
+
+def _check_final_leg(conn, st, final_boards, raw):
+    """Spolecna logika pro posledni usek (napr. prijezd do Berouna), pouziva
+    ji jak `collect`, tak `snapshot`. `raw` je slovnik pro syrovy zaznam."""
+    fl = conn.get("final_leg")
+    if not fl:
+        return
+    fb = final_boards.get(fl.get("node_asw_id"))
+    if not fb:
+        return
+    fd = find_departure(fb, fl["route"], fl["sched_arrival"], "arrival")
+    if not fd:
+        return
+    s = sample_from_departure(fd, "arrival")
+    st["final_seen"] = st.get("final_seen", 0) + 1
+    raw["final"] = s
+    if s["canceled"]:
+        st["final"] = s
+    elif s["rt_available"]:
+        # stejna logika jako u feederu (336): drz nejhorsi (nejvetsi) zpozdeni,
+        # jak se spoj blizi ke koncove zastavce.
+        w = st.get("_final_worst")
+        if w is None or (s["delay_s"] or 0) >= (w["delay_s"] or 0):
+            st["_final_worst"] = s
+            st["final"] = s
 
 
 def _poll_once(cfg, active, date_str, verbose=False):
@@ -593,7 +753,37 @@ def _stats_for(rows):
         out["delay_median_min"] = round(statistics.median(delays) / 60, 1)
         out["delay_p90_min"] = round(sorted(delays)[max(0, int(len(delays) * 0.9) - 1)] / 60, 1)
         out["delay_max_min"] = round(max(delays) / 60, 1)
+    out.update(_school_stats(rows))
     return out
+
+
+def _school_stats(rows):
+    """Statistika 'stihnu skolu do 8:00' - jen dny, kde se prestup povedl a
+    posledni usek (final_leg) je definovany a vyhodnotitelny."""
+    considered = [r for r in rows if r.get("school_ok") not in (None, "")]
+    ok = sum(1 for r in considered if r.get("school_ok") == "1")
+    margins = [int(r["school_margin_min"]) for r in considered
+               if r.get("school_margin_min") not in (None, "")]
+    out = {
+        "school_considered": len(considered),
+        "school_ok_n": ok,
+        "school_rate": (ok / len(considered)) if considered else None,
+    }
+    if margins:
+        out["school_margin_mean"] = round(statistics.mean(margins), 1)
+        out["school_margin_min_val"] = min(margins)
+    return out
+
+
+def _print_school(s):
+    if not s.get("school_considered"):
+        return
+    rate = "-" if s["school_rate"] is None else f"{s['school_rate']*100:.0f} %"
+    line = (f"  skola do 8:00 (kdyz prestup vysel): {rate}  "
+            f"({s['school_ok_n']}/{s['school_considered']} dni)")
+    if "school_margin_mean" in s:
+        line += f", prumerna rezerva {s['school_margin_mean']} min (min {s['school_margin_min_val']} min)"
+    print(line)
 
 
 def cmd_report(html_path=None):
@@ -621,6 +811,7 @@ def cmd_report(html_path=None):
               f"median {overall['delay_median_min']} min, p90 {overall['delay_p90_min']} min, "
               f"max {overall['delay_max_min']} min")
     print(f"  dni bez dat/rozhodnuti: {overall['no_data']}, mimo provoz: {overall['no_service']}")
+    _print_school(overall)
 
     for cid, crows in by_id.items():
         label = next((c.get("label", "") for c in conns if c["id"] == cid), "")
@@ -632,6 +823,7 @@ def cmd_report(html_path=None):
         if "delay_mean_min" in s:
             print(f"  zpozdeni 336: prumer {s['delay_mean_min']} / median {s['delay_median_min']} "
                   f"/ p90 {s['delay_p90_min']} / max {s['delay_max_min']} min")
+        _print_school(s)
 
     print("\nPOSLEDNICH 14 ZAZNAMU")
     print(f"{'datum':11s} {'den':3s} {'spoj':5s} {'336 zpozd':>10s} {'384 zpozd':>10s} "
@@ -661,12 +853,22 @@ def _write_html(path, rows, conns, overall, by_id):
         if "delay_mean_min" in s:
             dl = (f"<div class='sub'>336 zpozdeni: prumer {s['delay_mean_min']} / "
                   f"median {s['delay_median_min']} / p90 {s['delay_p90_min']} / max {s['delay_max_min']} min</div>")
+        school = ""
+        if s.get("school_considered"):
+            srate = "-" if s["school_rate"] is None else f"{s['school_rate']*100:.0f}&nbsp;%"
+            school = (f"<div class='sub'>&#127979; skola do 8:00: <b>{srate}</b> "
+                      f"({s['school_ok_n']}/{s['school_considered']} dni)")
+            if "school_margin_mean" in s:
+                school += (f", rezerva prumer {s['school_margin_mean']} min "
+                           f"(min {s['school_margin_min_val']} min)")
+            school += "</div>"
         return f"""<div class="card">
   <h2>{esc(title)}</h2>
   <div class="rate">{rate}</div>
   <div class="sub">{s['ok']} OK / {s['missed']} zmeskano / {s['decisive']} rozhodnutelnych dni</div>
   <div class="sub">336 zrus. {s['feeder_canceled']} &middot; 384 zrus. {s['connector_canceled']} &middot; bez dat {s['no_data']} &middot; mimo provoz {s['no_service']}</div>
   {dl}
+  {school}
 </div>"""
 
     trs = []
@@ -676,10 +878,19 @@ def _write_html(path, rows, conns, overall, by_id):
         fd = "-" if r["feeder_delay_s"] == "" else f"{int(r['feeder_delay_s'])//60:+d} min"
         cd = "-" if r["conn_delay_s"] == "" else f"{int(r['conn_delay_s'])//60:+d} min"
         mg = "-" if r["margin_s"] == "" else f"{int(r['margin_s'])//60:+d} min"
+        eta = r.get("eta_school") or "-"
+        smg = r.get("school_margin_min")
+        smg_cls = ""
+        if smg not in (None, ""):
+            smg_cls = " class='sok'" if int(smg) >= 0 else " class='sbad'"
+            smg = f"{int(smg):+d} min"
+        else:
+            smg = "-"
         trs.append(f"<tr class='{cls}'><td>{esc(r['date'])}</td><td>{esc(r['weekday'])}</td>"
                    f"<td>{esc(r['conn_id'])}</td><td>{esc(r['feeder_eff_arr'])}</td>"
                    f"<td>{fd}</td><td>{esc(r['conn_eff_dep'])}</td><td>{cd}</td>"
-                   f"<td>{mg}</td><td>{esc(r['verdict'])}</td><td>{esc(r['notes'])}</td></tr>")
+                   f"<td>{mg}</td><td>{esc(r['verdict'])}</td>"
+                   f"<td>{esc(eta)}</td><td{smg_cls}>{smg}</td><td>{esc(r['notes'])}</td></tr>")
 
     cards = card("CELKEM", overall)
     for cid, crows in by_id.items():
@@ -704,6 +915,8 @@ def _write_html(path, rows, conns, overall, by_id):
  tr.ok td:nth-child(9){{color:#0a7d28;font-weight:600}}
  tr.bad td:nth-child(9){{color:#c02626;font-weight:600}}
  tr.meh td:nth-child(9){{color:#8a6d1a}}
+ td.sok{{color:#0a7d28;font-weight:600}}
+ td.sbad{{color:#c02626;font-weight:600}}
 </style></head><body>
 <h1>PID prestup 336 &rarr; 384 na Zlicine</h1>
 <div class="meta">Aktualizovano {esc(prague_now().strftime('%d.%m.%Y %H:%M'))} &middot;
@@ -711,7 +924,8 @@ def _write_html(path, rows, conns, overall, by_id):
  rezerva na prestup {esc(rows[-1]['buffer_min'])} min</div>
 <div class="cards">{cards}</div>
 <table><thead><tr><th>datum</th><th>den</th><th>spoj</th><th>336 prijezd</th><th>zpozd.</th>
- <th>384 odjezd</th><th>zpozd.</th><th>rezerva</th><th>verdikt</th><th>pozn.</th></tr></thead>
+ <th>384 odjezd</th><th>zpozd.</th><th>rezerva</th><th>verdikt</th>
+ <th>prichod skola</th><th>rezerva do 8:00</th><th>pozn.</th></tr></thead>
 <tbody>{''.join(trs)}</tbody></table>
 </body></html>"""
     with open(path, "w", encoding="utf-8") as f:
