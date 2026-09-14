@@ -12,19 +12,15 @@ on:
         required: false
         default: "16"
   schedule:
-    # Cron je v UTC a GitHub ho negarantuje presne - obcas zabery meskaji
-    # o desitky minut, jednou i o hodiny (overeno v provozu 9.-11.9.2026).
-    # Proto misto 3 presnych zaberu bezi kazdych 15 min v siroke oknu 3:00-7:59
-    # UTC (= 5:00-9:59 leto / 4:00-8:59 zima), coz pokryje oba spoje v obou
-    # rocnich obdobich s velkou rezervou. `snapshot --wait` sam pozna, jestli
-    # je "na rade" nejaky prestup (~40 min pred nim az do jeho konce) - pokud
-    # ne, beh skonci za par vterin, takze ta frekvence nic nestoji.
+    # ZMERENO 9.-12.9.2026 (viz logs/reliability-test-2026-09-12.md): GitHub
+    # v praxi spoustel scheduled beh na tomhle repu jen cca 1x DENNE, uplne
+    # bez ohledu na to, jestli byl cron 3 zabery/den nebo 20 zaberu/den, a s
+    # nepredvidatelnym zpozdenim (par minut az 4,5 hodiny). Zvyseni frekvence
+    # cronu tedy problem neresi - GitHub scheduled trigger neni spolehlivy
+    # zdroj pro presny cas. Necham ho bezet jako bezplatny bonus (obcas neco
+    # chytne), ale PRIMARNI sber je ted lokalni Planovac uloh + git_sync (viz
+    # README cast 3b) - ten uspesne dodal data 10.9. i 14.9.
     - cron: '*/15 3-7 * * 1-5'
-    # JEDNORAZOVY TEST SPOLEHLIVOSTI SPOUSTENI (sobota 12.9.2026, viz README).
-    # Testuje jen, jestli GitHub cron fakticky odpaluje behy blizko ocekavanemu
-    # casu - skript sam se v sobotu hned ukonci (vikend), to se netestuje.
-    # Po vyhodnoceni (13.9.2026 nebo pozdeji) tenhle radek smazat.
-    - cron: '*/15 3-7 12 9 *'
 
 permissions:
   contents: write

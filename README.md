@@ -71,20 +71,21 @@ odjezdovou tabuli Zličína, drží si poslední známé zpoždění 336 a 384 a
 
 ## 3. Automatické spouštění
 
-### 3a. GitHub Actions (doporučeno) — `.github/workflows/snapshot.yml`
+### 3a. GitHub Actions (bezplatný bonus, NE primární) — `.github/workflows/snapshot.yml`
 
-Sběr běží jako **GitHub Actions workflow** v tomhle repu (nezávislé na tvém PC).
-GitHub-hosted runner má volný ven na internet — Claude cloud prostředí naopak
-`api.golemio.cz` blokuje egress politikou, takže tam to nejde.
+**Změřeno 9.–12. 9. 2026** (viz [`logs/reliability-test-2026-09-12.md`](logs/reliability-test-2026-09-12.md)):
+GitHub scheduled trigger na tomhle repu v praxi spouštěl běh jen **cca 1×
+denně**, úplně bez ohledu na to, jestli byl v cronu 1 záběr nebo 20 (`*/15`),
+s nepředvídatelným zpožděním od pár minut do 4,5 hodiny. **Zvýšení frekvence
+cronu problém neřeší** — GitHub scheduled trigger prostě není spolehlivý
+zdroj přesného času, aspoň ne na tomhle (veřejném, nízkoprovozním) repu.
+Necháváme ho běžet dál jako bezplatný bonus (občas něco chytí, `workflow_dispatch`
+pro ruční test funguje spolehlivě), ale **spoléhat se na něj jako na primární
+zdroj nejde**.
 
-- Cron: `*/15 3-7 * * 1-5` (UTC) — běží každých 15 minut v širokém okně
-  3:00–7:59 UTC (5:00–9:59 léto / 4:00–8:59 zima). **GitHub scheduled workflow
-  neni spolehlivy na minutu** — v provozu (9.–11. 9. 2026) jsme viděli záběr
-  zpožděný o 2,5 h i den, kdy do 07:04 UTC nenaběhl vůbec. Proto místo 3 přesných
-  časů běží tahle vysoká frekvence: `snapshot --wait` sám pozná, jestli je nějaký
-  přestup „na řadě" (~40 min před ním až do jeho konce) — pokud ne, doběhne za
-  pár vteřin, takže to nic nestojí, ale dává to hodně šancí trefit se do okna
-  i když se GitHub zpozdí.
+- Cron: `*/15 3-7 * * 1-5` (UTC). Skript `snapshot --wait` sám pozná, jestli
+  je nějaký přestup „na řadě" (~40 min před ním až do jeho konce) — pokud ne,
+  doběhne za pár vteřin.
 - Skript počká na čas přestupu, ~16 min polluje odjezdovou tabuli Zličína
   (u 336 drží *nejhorší* zpoždění, u 384 *poslední*) a pak — pokud se přestup
   povedl — pokračuje sledováním příjezdu do Beroun,sídliště až do jeho
@@ -96,6 +97,10 @@ GitHub-hosted runner má volný ven na internet — Claude cloud prostředí nao
   → Actions). `monitor.py` bere klíč z proměnné `GOLEMIO_API_KEY`, jinak z
   `config.json` (lokálně).
 - Ruční spuštění / test: záložka **Actions → PID snapshot → Run workflow**.
+- Zvažovaná budoucí oprava: externí cron služba (např. cron-job.org), která
+  by v přesný čas volala GitHub REST API (`workflow_dispatch`) místo spoléhání
+  na GitHubův vlastní `schedule:` trigger — externí služby čas dodržují přesně,
+  protože nejde o frontu škrcenou na straně GitHubu.
 
 Nastavení (jednorázově):
 ```bash
@@ -103,7 +108,7 @@ gh secret set GOLEMIO_API_KEY --repo JindraKK/pid-transfer-monitor   # vloží k
 gh auth refresh -s workflow                                          # aby šlo pushnout .github/workflows/
 ```
 
-### 3b. Lokálně na Windows (záloha) — `register-task.ps1`
+### 3b. Lokálně na Windows (primární) — `register-task.ps1`
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\register-task.ps1
