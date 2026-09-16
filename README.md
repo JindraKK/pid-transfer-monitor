@@ -7,17 +7,20 @@ procent se na ten přestup můžu spolehnout".
 
 Sledované spoje (`connections.json`):
 
-| id | feeder | příjezd (JŘ) | connector | odjezd (JŘ) | rezerva JŘ | 384 do Berouna,sídliště |
-|------|--------|--------------|-----------|-------------|------------|------------|
-| 0601 | 336    | 6:10         | 384       | 6:20        | 10 min | 6:50 |
-| 0701 | 336    | 7:11         | 384       | 7:20        | 9 min | 7:50 |
+| id | feeder | příjezd (JŘ) | connector | odjezd (JŘ) | rezerva JŘ | 384 do Berouna,sídliště | termín na škole |
+|------|--------|--------------|-----------|-------------|------------|------------|------------|
+| 0601 | 336    | 6:10         | 384       | 6:20        | 10 min | 6:50 | 7:10 |
+| 0701 | 336    | 7:11         | 384       | 7:20        | 9 min | 7:50 | 8:00 |
 
 Přestup se počítá jako **úspěšný**, když skutečný odjezd 384 je aspoň
 `transfer_buffer_min` (teď **1 min**) po skutečném příjezdu 336.
 
 Navíc se (jen když prestup vyjde) sleduje i **poslední úsek** — skutečný
 příjezd 384 do Beroun,sídliště — a spočítá se, jestli to i s chůzí stihneš
-do školy do 8:00 (viz [Škola do 8:00](#škola-do-800) níže).
+do školy. **0601 a 0701 mají každý svůj vlastní termín** (0601 sleduje
+dřívější 7:10, kdy je občas potřeba být ve škole; 0701 běžný začátek 8:00) —
+proto se statistika „škola" počítá a zobrazuje **jen zvlášť pod každým
+spojem**, nikdy sloučeně za oba (viz [Škola do zvonění](#škola-do-zvonění) níže).
 
 ---
 
@@ -125,12 +128,21 @@ to fakticky zachránilo den dat, který cloud tou dobou nesebral.
 Ruční test: `Start-ScheduledTask -TaskName "PID transfer monitor"`
 Odebrání: `Unregister-ScheduledTask -TaskName "PID transfer monitor" -Confirm:$false`
 
-## Škola do 8:00
+## Škola do zvonění
 
 Kromě přestupu na Zličíně se (jen v dnech, kdy přestup vyšel) sleduje i
 **skutečný příjezd 384 do Beroun,sídliště** a spočítá se odhad příchodu do
-školy: `final_eff_arr + walk_min_to_school`. Když je pod `school_deadline`
-(8:00), je `school_ok = 1`.
+školy: `final_eff_arr + walk_min_to_school`. Když je pod `school_deadline`,
+je `school_ok = 1`.
+
+**0601 a 0701 mají každý svůj vlastní termín** — sledujeme je z různého
+důvodu (0601 kvůli občasné potřebě být ve škole už v **7:10**, 0701 kvůli
+běžnému začátku v **8:00**) — takže:
+
+- `connections.json` má u každého spoje jiný `final_leg.school_deadline`.
+- **Statistika „škola" se počítá a vypisuje jen zvlášť pod každým spojem** —
+  `report`, HTML i CELKEM karta ji nikdy neslučují dohromady, protože
+  průměrovat rezervu vůči dvěma různým termínům by nedávalo smysl.
 
 Nastavení je v `connections.json` → `final_leg`:
 ```json
@@ -141,7 +153,7 @@ Nastavení je v `connections.json` → `final_leg`:
   "node_name": "Beroun,sidliste",
   "walk_min_to_school": 5,
   "school_name": "SZS Beroun (Mladeze 1102/8)",
-  "school_deadline": "08:00"
+  "school_deadline": "07:10"
 }
 ```
 
@@ -152,8 +164,8 @@ ale přesně odpovídá cíli chůze, který PID plánovač počítal z **Beroun
 (viz původní screenshoty — „Přesun asi 5 min na Beroun, Mládeže 1102/8"), takže
 jsem použil tenhle stop a **5 min chůze** (ne 1 min). Pokud znáš přesnější
 zastávku nebo kratší čas chůze, uprav `node_asw_id`/`walk_min_to_school` v
-`connections.json` — `walk_min_to_school: 1` by dělalo rozdíl hlavně u spoje
-0701 (příjezd 7:50, jinak jen 10 min rezervy do 8:00).
+`connections.json` — u spoje 0701 (jen 10 min rezervy do 8:00) by to udělalo
+citelný rozdíl.
 
 Poznámka: `school_ok` se počítá jen když **přestup vyšel** (`verdict == OK`) —
 pokud se prestup nepovede, řídil by ses jinym (pozdejsim) spojem a odhad by

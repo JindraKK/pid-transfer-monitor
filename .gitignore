@@ -7,3 +7,8 @@ data/*.tmp
 *.bak
 
 config.json
+
+# lokalni poznamky s tajemstvimi - nikdy necommitovat (repo je verejne)
+auth/
+*token*.txt
+*.pat

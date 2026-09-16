@@ -758,16 +758,23 @@ def _stats_for(rows):
 
 
 def _school_stats(rows):
-    """Statistika 'stihnu skolu do 8:00' - jen dny, kde se prestup povedl a
-    posledni usek (final_leg) je definovany a vyhodnotitelny."""
+    """Statistika 'stihnu skolu do terminu' - jen dny, kde se prestup povedl a
+    posledni usek (final_leg) je definovany a vyhodnotitelny.
+
+    Pozor: ruzne spoje muzou mit ruzny 'school_deadline' (napr. 0601 sleduje
+    dřívější termín 7:10, 0701 běžný začátek 8:00) - proto se tahle statistika
+    pocita a vypisuje jen POD JEDNOTLIVYMI spoji, nikdy slucene za "CELKEM" -
+    prumerovat rezervu vuci dvema ruznym terminum by nedavalo smysl."""
     considered = [r for r in rows if r.get("school_ok") not in (None, "")]
     ok = sum(1 for r in considered if r.get("school_ok") == "1")
     margins = [int(r["school_margin_min"]) for r in considered
                if r.get("school_margin_min") not in (None, "")]
+    deadline = next((r["school_deadline"] for r in reversed(rows) if r.get("school_deadline")), "")
     out = {
         "school_considered": len(considered),
         "school_ok_n": ok,
         "school_rate": (ok / len(considered)) if considered else None,
+        "school_deadline": deadline,
     }
     if margins:
         out["school_margin_mean"] = round(statistics.mean(margins), 1)
@@ -779,7 +786,8 @@ def _print_school(s):
     if not s.get("school_considered"):
         return
     rate = "-" if s["school_rate"] is None else f"{s['school_rate']*100:.0f} %"
-    line = (f"  skola do 8:00 (kdyz prestup vysel): {rate}  "
+    deadline = s.get("school_deadline") or "?"
+    line = (f"  skola do {deadline} (kdyz prestup vysel): {rate}  "
             f"({s['school_ok_n']}/{s['school_considered']} dni)")
     if "school_margin_mean" in s:
         line += f", prumerna rezerva {s['school_margin_mean']} min (min {s['school_margin_min_val']} min)"
@@ -811,7 +819,8 @@ def cmd_report(html_path=None):
               f"median {overall['delay_median_min']} min, p90 {overall['delay_p90_min']} min, "
               f"max {overall['delay_max_min']} min")
     print(f"  dni bez dat/rozhodnuti: {overall['no_data']}, mimo provoz: {overall['no_service']}")
-    _print_school(overall)
+    # "skola do terminu" se schvalne netiskne tady u CELKEM - 0601 a 0701 maji
+    # kazdy jiny termin (viz _school_stats), slucet by to nedavalo smysl.
 
     for cid, crows in by_id.items():
         label = next((c.get("label", "") for c in conns if c["id"] == cid), "")
@@ -847,16 +856,20 @@ def _write_html(path, rows, conns, overall, by_id):
     def esc(x):
         return str(x).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-    def card(title, s):
+    def card(title, s, show_school=True):
         rate = "-" if s["success_rate"] is None else f"{s['success_rate']*100:.0f}&nbsp;%"
         dl = ""
         if "delay_mean_min" in s:
             dl = (f"<div class='sub'>336 zpozdeni: prumer {s['delay_mean_min']} / "
                   f"median {s['delay_median_min']} / p90 {s['delay_p90_min']} / max {s['delay_max_min']} min</div>")
         school = ""
-        if s.get("school_considered"):
+        # "skola do terminu" se ukazuje jen u jednotlivych spoju - kazdy muze
+        # mit jiny termin (0601 = drivejsi 7:10, 0701 = bezny zacatek 8:00),
+        # slucet je do jedne procentualni statistiky by nedavalo smysl.
+        if show_school and s.get("school_considered"):
             srate = "-" if s["school_rate"] is None else f"{s['school_rate']*100:.0f}&nbsp;%"
-            school = (f"<div class='sub'>&#127979; skola do 8:00: <b>{srate}</b> "
+            deadline = esc(s.get("school_deadline") or "?")
+            school = (f"<div class='sub'>&#127979; skola do {deadline}: <b>{srate}</b> "
                       f"({s['school_ok_n']}/{s['school_considered']} dni)")
             if "school_margin_mean" in s:
                 school += (f", rezerva prumer {s['school_margin_mean']} min "
@@ -892,7 +905,7 @@ def _write_html(path, rows, conns, overall, by_id):
                    f"<td>{mg}</td><td>{esc(r['verdict'])}</td>"
                    f"<td>{esc(eta)}</td><td{smg_cls}>{smg}</td><td>{esc(r['notes'])}</td></tr>")
 
-    cards = card("CELKEM", overall)
+    cards = card("CELKEM", overall, show_school=False)
     for cid, crows in by_id.items():
         label = next((c.get("label", "") for c in conns if c["id"] == cid), cid)
         cards += card(label or cid, _stats_for(crows))
@@ -925,7 +938,7 @@ def _write_html(path, rows, conns, overall, by_id):
 <div class="cards">{cards}</div>
 <table><thead><tr><th>datum</th><th>den</th><th>spoj</th><th>336 prijezd</th><th>zpozd.</th>
  <th>384 odjezd</th><th>zpozd.</th><th>rezerva</th><th>verdikt</th>
- <th>prichod skola</th><th>rezerva do 8:00</th><th>pozn.</th></tr></thead>
+ <th>prichod skola</th><th>rezerva do terminu</th><th>pozn.</th></tr></thead>
 <tbody>{''.join(trs)}</tbody></table>
 </body></html>"""
     with open(path, "w", encoding="utf-8") as f:
