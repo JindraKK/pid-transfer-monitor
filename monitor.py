@@ -259,31 +259,106 @@ def _git(args, timeout=60):
                            timeout=timeout, encoding="utf-8", errors="replace")
 
 
-def git_sync(commit_msg):
-    """Nejlepsi-moznou-snahou: pred sberem stahne novinky, po sberu commitne a
-    pushne data/. Pouziva se pri lokalnim behu (collect/snapshot na Windows),
-    aby vysledky nezustaly jen na disku, kdyz uz cloud beh nekdy neproběhne.
-    Kdyz tohle neni git repo, nebo git/sit neni k dispozici, tise se preskoci.
+def _csv_rows_from_ref(ref, path="data/results.csv"):
+    """Precte results.csv z daneho git ref (napr. 'origin/main'), bez dotyku
+    pracovniho adresare. None kdyz to nejde precist (repo/ref/soubor chybi)."""
+    r = _git(["show", f"{ref}:{path}"])
+    if r.returncode != 0:
+        return None
+    import io
+    return list(csv.DictReader(io.StringIO(r.stdout)))
+
+
+def _drop_rows(path, date_str, conn_ids):
+    """Odstrani z results.csv radky pro dane (datum, conn_id) - pouziva se,
+    kdyz uz je stejny vysledek zaznamenany odjinud (cloud/jiny kolektor),
+    aby nas vlastni commit nezpusobil textovy konflikt v CSV."""
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        fieldnames = reader.fieldnames
+        rows = [r for r in reader if not (r.get("date") == date_str and r.get("conn_id") in conn_ids)]
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
+def git_sync(commit_msg, date_str=None, conn_ids=None):
+    """Nejlepsi-moznou-snahou: po sberu commitne a pushne data/. Pouziva se
+    pri lokalnim behu (collect/snapshot na Windows), aby vysledky nezustaly
+    jen na disku, kdyz uz cloud beh nekdy neproběhne.
+
+    Kdyz uz origin mezitim ma vysledek pro (date_str, conn_id) z jineho
+    zdroje (cloud dorazil driv), nas radek se pro ten spoj proste zahodi -
+    "kdo prvni pushne, ten plati" - misto aby vznikl neresitelny textovy
+    konflikt ve sdilenem CSV. Nikdy nenechava repo v rozdelanem stavu
+    (viseci rebase / detached HEAD) - kdyz cisty pokus neprojde, radsi se
+    vzda vlastniho commitu a drzi se toho, co uz je na origin.
     """
     if not os.path.isdir(os.path.join(HERE, ".git")):
         return
     try:
+        for d in ("rebase-merge", "rebase-apply"):
+            if os.path.isdir(os.path.join(HERE, ".git", d)):
+                _log("git sync: z minula tu zustal rozdelany rebase, ruším ho.")
+                _git(["rebase", "--abort"])
+
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"]).stdout.strip()
+        if branch != "main":
+            _log(f"git sync: byl jsem mimo 'main' (byl jsem na {branch!r}) - "
+                 "vracim se, tohle kolo nepushuju.")
+            _git(["checkout", "main"])
+            return
+
         st = _git(["status", "--porcelain", "data/"])
         if st.returncode != 0 or not st.stdout.strip():
             return
+
+        _git(["fetch", "origin", "main"], timeout=30)
+
+        if date_str and conn_ids:
+            upstream = _csv_rows_from_ref("origin/main")
+            if upstream is not None:
+                already = {c for c in conn_ids if any(
+                    r.get("date") == date_str and r.get("conn_id") == c for r in upstream)}
+                if already:
+                    _drop_rows(RESULTS_PATH, date_str, already)
+                    _log(f"git sync: {sorted(already)} uz ma vysledek odjinud - "
+                         "zahazuji lokalni radky, aby nevznikl konflikt.")
+                if already >= set(conn_ids):
+                    # nic vlastniho k pridani nezbylo - zahod i syrove vzorky
+                    _git(["checkout", "--", "data/samples.jsonl"])
+                    st2 = _git(["status", "--porcelain", "data/"])
+                    if not st2.stdout.strip():
+                        return
+
         _git(["config", "user.name", "pid-local-collector"])
         _git(["config", "user.email", "local@pid-monitor"])
         _git(["add", "data/"])
         c = _git(["commit", "-m", commit_msg])
         if c.returncode != 0:
-            _log(f"git sync: commit selhal: {c.stderr.strip()[:300]}")
             return
-        _git(["pull", "--rebase", "--autostash"], timeout=30)
+
         p = _git(["push"], timeout=60)
         if p.returncode == 0:
             _log("git sync: vysledky commitnuty a pushnuty.")
-        else:
-            _log(f"git sync: push selhal (data zustavaji aspon lokalne): {p.stderr.strip()[:300]}")
+            return
+
+        # Push odmitnut - origin se mezitim posunul. Zkus to jeste jednou
+        # cistym fast-forward mergem (zadny rebase, zadne riziko konfliktu).
+        _git(["fetch", "origin", "main"], timeout=30)
+        m = _git(["merge", "--ff-only", "origin/main"])
+        if m.returncode == 0:
+            p2 = _git(["push"], timeout=60)
+            if p2.returncode == 0:
+                _log("git sync: vysledky commitnuty a pushnuty (2. pokus).")
+                return
+
+        _log("git sync: origin se mezitim posunul a nejde to cistě sloučit - "
+             "zahazuji svuj commit, data zustavaji zaznamenana jen na origin.")
+        _git(["fetch", "origin", "main"], timeout=30)
+        _git(["reset", "--hard", "origin/main"])
     except Exception as e:
         _log(f"git sync selhal (nevadi, data zustavaji lokalne): {e!r}")
 
@@ -522,7 +597,7 @@ def cmd_collect(cfg, conns, once=False):
                 if not a["final"]:
                     finalize(cfg, a["conn"], a["state"], date_str, polls_ok, polls_fail)
             _log("Hotovo.")
-            git_sync(f"local collect {date_str}")
+            git_sync(f"local collect {date_str}", date_str, [a["conn"]["id"] for a in active])
             return
         time.sleep(cfg["poll_interval_s"])
 
@@ -612,7 +687,7 @@ def cmd_snapshot(cfg, conns, duration_min=16, poll_s=45, wait=False, lead_min=2)
     for t in targets:
         finalize(cfg, t["conn"], t["state"], date_str, polls_ok, polls_fail)
     _log("snapshot: hotovo.")
-    git_sync(f"local snapshot {date_str}")
+    git_sync(f"local snapshot {date_str}", date_str, [t["conn"]["id"] for t in targets])
 
 
 def _process_snapshot(board, targets, date_str, final_boards=None):
